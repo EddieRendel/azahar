@@ -101,10 +101,19 @@ void Material::LoadFromDisk(bool flip_png) noexcept {
         return;
     }
     for (CustomTexture* const texture : textures) {
-        if (!texture || texture->IsLoaded()) {
+        if (!texture) {
             continue;
         }
+        // A file mapped to several hashes belongs to several materials, which async loading can
+        // decode on different workers at once: always go through the texture's decode_mutex
+        // (it returns at once if already loaded) instead of trusting IsLoaded() while another
+        // worker may still be filling the data.
         texture->LoadFromDisk(flip_png);
+        if (!texture->IsLoaded()) {
+            LOG_ERROR(Render, "Failed to load {} map {}", MapTypeName(texture->type), texture->path);
+            state = DecodeState::Failed;
+            return;
+        }
         size += texture->data.size();
         LOG_DEBUG(Render, "Loading {} map {}", MapTypeName(texture->type), texture->path);
     }

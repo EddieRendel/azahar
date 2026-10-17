@@ -1126,15 +1126,25 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
     // With async custom loading this runs frames later (CustomTexManager::TickFrame); by then the
     // surface may have been garbage collected (its slot destroyed) or the slot reused for another
     // surface. Only upload if the slot still holds the same surface.
-    const auto upload = [this, level, surface_id, material,
-                         unique_id = surface.UniqueId()]() -> bool {
+    const auto upload = [this, level, surface_id, material, unique_id = surface.UniqueId(),
+                         load_info, hash]() -> bool {
         if (!slot_surfaces.contains(surface_id) ||
             slot_surfaces[surface_id].UniqueId() != unique_id) {
             return false;
         }
+        // The guest texture may have been rewritten while the file decoded.
+        MemoryRef source_ptr = memory.GetPhysicalRef(load_info.addr);
+        if (!source_ptr ||
+            ComputeHash(load_info, source_ptr.GetWriteBytes(load_info.end - load_info.addr)) !=
+                hash) {
+            return false;
+        }
         ASSERT_MSG(True(slot_surfaces[surface_id].flags & SurfaceFlagBits::Custom),
                    "Surface is not suitable for custom upload, aborting!");
-        if (!slot_surfaces[surface_id].IsCustom()) {
+        // A custom surface's images are sized for its material: a different material needs a new
+        // surface too, or the upload would write past the image (Vulkan copyBufferToImage).
+        if (!slot_surfaces[surface_id].IsCustom() ||
+            slot_surfaces[surface_id].material != material) {
             const SurfaceBase old_surface{slot_surfaces[surface_id]};
             const SurfaceId old_id =
                 slot_surfaces.swap_and_insert(surface_id, runtime, old_surface, material);
