@@ -4,7 +4,10 @@
 
 #include <array>
 #include <atomic>
+#include <mutex>
 #include <thread>
+#include <utility>
+#include <vector>
 #include <teakra/teakra.h>
 #include "audio_core/lle/lle.h"
 #include "common/assert.h"
@@ -148,6 +151,35 @@ struct DspLle::Impl final {
     std::atomic<bool> stop_signal = false;
     std::size_t stop_generation;
 
+    // In multithread mode the DSP's interrupt callbacks run on teakra_thread, but the handler
+    // signals kernel events, which reschedules guest threads; the emulation thread reschedules
+    // without the HLE lock, so doing that from teakra_thread races on the scheduler (lost wakeups
+    // freeze the game, or the heap gets corrupted). Queue them here and deliver them on the
+    // emulation thread after each slice barrier instead.
+    std::function<void(Service::DSP::InterruptType type, DspPipe pipe)> interrupt_handler;
+    std::mutex pending_interrupts_mutex;
+    std::vector<std::pair<Service::DSP::InterruptType, DspPipe>> pending_interrupts;
+
+    void SignalInterrupt(Service::DSP::InterruptType type, DspPipe pipe) {
+        if (multithread) {
+            std::scoped_lock lock{pending_interrupts_mutex};
+            pending_interrupts.emplace_back(type, pipe);
+        } else {
+            interrupt_handler(type, pipe);
+        }
+    }
+
+    void DeliverPendingInterrupts() {
+        std::vector<std::pair<Service::DSP::InterruptType, DspPipe>> interrupts;
+        {
+            std::scoped_lock lock{pending_interrupts_mutex};
+            interrupts.swap(pending_interrupts);
+        }
+        for (const auto& [type, pipe] : interrupts) {
+            interrupt_handler(type, pipe);
+        }
+    }
+
     static constexpr u32 DspDataOffset = 0x40000;
     static constexpr u32 TeakraSlice = 16384;
 
@@ -175,6 +207,7 @@ struct DspLle::Impl final {
     void RunTeakraSlice() {
         if (multithread) {
             teakra_slice_barrier.Sync();
+            DeliverPendingInterrupts();
         } else {
             teakra.Run(TeakraSlice);
         }
@@ -407,20 +440,21 @@ void DspLle::PipeWrite(DspPipe pipe_number, std::span<const u8> buffer) {
 
 void DspLle::SetInterruptHandler(
     std::function<void(Service::DSP::InterruptType type, DspPipe pipe)> handler) {
-    impl->teakra.SetRecvDataHandler(0, [this, handler]() {
+    impl->interrupt_handler = std::move(handler);
+    impl->teakra.SetRecvDataHandler(0, [this]() {
         if (!impl->loaded) {
             return;
         }
-        handler(Service::DSP::InterruptType::Zero, static_cast<DspPipe>(0));
+        impl->SignalInterrupt(Service::DSP::InterruptType::Zero, static_cast<DspPipe>(0));
     });
-    impl->teakra.SetRecvDataHandler(1, [this, handler]() {
+    impl->teakra.SetRecvDataHandler(1, [this]() {
         if (!impl->loaded) {
             return;
         }
-        handler(Service::DSP::InterruptType::One, static_cast<DspPipe>(0));
+        impl->SignalInterrupt(Service::DSP::InterruptType::One, static_cast<DspPipe>(0));
     });
 
-    auto ProcessPipeEvent = [this, handler](bool event_from_data) {
+    auto ProcessPipeEvent = [this](bool event_from_data) {
         if (!impl->loaded)
             return;
 
@@ -445,7 +479,7 @@ void DspLle::SetInterruptHandler(
                 impl->ReadPipe(static_cast<u8>(pipe),
                                impl->GetPipeReadableSize(static_cast<u8>(pipe)));
             } else {
-                handler(Service::DSP::InterruptType::Pipe, static_cast<DspPipe>(pipe));
+                impl->SignalInterrupt(Service::DSP::InterruptType::Pipe, static_cast<DspPipe>(pipe));
             }
         }
     };
