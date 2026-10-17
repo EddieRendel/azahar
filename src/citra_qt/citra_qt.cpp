@@ -1541,6 +1541,13 @@ void GMainWindow::BootGame(const QString& filename) {
     Loader::ResultStatus res =
         loader ? loader->ReadProgramId(title_id) : Loader::ResultStatus::Error;
 
+    // Save configurations before the per-game config is loaded: with per-game values active,
+    // SwitchableSetting::GetValue() returns them and the save would write them into the global
+    // config (#1898).
+    UpdateUISettings();
+    game_list->SaveInterfaceLayout();
+    config->Save();
+
     if (Loader::ResultStatus::Success == res) {
         // Load per game settings
         const std::string name{is_artic ? "" : FileUtil::GetFilename(filename.toStdString())};
@@ -1566,11 +1573,6 @@ void GMainWindow::BootGame(const QString& filename) {
     system.ApplySettings();
 
     Settings::LogSettings();
-
-    // Save configurations
-    UpdateUISettings();
-    game_list->SaveInterfaceLayout();
-    config->Save();
 
     if (!LoadROM(filename)) {
         render_window->ReleaseRenderTarget();
@@ -4158,6 +4160,8 @@ void GMainWindow::closeEvent(QCloseEvent* event) {
     if (emu_thread) {
         ShutdownGame();
     }
+    // Drop the per-game overrides so the save below writes the global values (#1898).
+    Settings::RestoreGlobalState(false);
 
     // Save settings in case they were changed from outside the configuration menu.
     config->Save();
