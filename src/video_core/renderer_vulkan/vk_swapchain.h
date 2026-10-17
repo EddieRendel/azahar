@@ -106,6 +106,7 @@ private:
     u32 image_index = 0;
     u32 frame_index = 0;
     bool needs_recreation = true;
+    bool recreate_after_present = false;
     bool low_refresh_rate;
 };
 

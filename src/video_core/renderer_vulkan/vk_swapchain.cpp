@@ -34,6 +34,9 @@ void Swapchain::Create(u32 width_, u32 height_, vk::SurfaceKHR surface_, bool lo
     surface = surface_;
     low_refresh_rate = low_refresh_rate_;
     needs_recreation = false;
+    recreate_after_present = false;
+    // The new swapchain can have fewer images than the old one.
+    frame_index = 0;
 
     Destroy();
 
@@ -105,6 +108,10 @@ bool Swapchain::AcquireNextImage() {
     case vk::Result::eSuccess:
         break;
     case vk::Result::eSuboptimalKHR:
+        // The image was acquired and image_acquired[frame_index] will be signaled: use it and
+        // recreate after presenting, instead of destroying a semaphore with a pending signal.
+        recreate_after_present = true;
+        break;
     case vk::Result::eErrorSurfaceLostKHR:
     case vk::Result::eErrorOutOfDateKHR:
         needs_recreation = true;
@@ -142,6 +149,10 @@ void Swapchain::Present() {
     }
 
     frame_index = (frame_index + 1) % image_count;
+    if (recreate_after_present) {
+        recreate_after_present = false;
+        needs_recreation = true;
+    }
 }
 
 void Swapchain::FindPresentFormat() {
