@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the misc/licenses/gplv2.txt file included.
 
+#include <atomic>
 #include "common/alignment.h"
 #include "video_core/custom_textures/material.h"
 #include "video_core/rasterizer_cache/surface_base.h"
@@ -10,7 +11,10 @@
 namespace VideoCore {
 
 SurfaceBase::SurfaceBase(const SurfaceParams& params, const SurfaceFlagBits& initial_flag_bits)
-    : SurfaceParams{params}, flags(initial_flag_bits) {}
+    : SurfaceParams{params}, flags(initial_flag_bits) {
+    static std::atomic<u64> next_unique_id{1};
+    unique_id = next_unique_id.fetch_add(1, std::memory_order_relaxed);
+}
 
 SurfaceBase::~SurfaceBase() = default;
 

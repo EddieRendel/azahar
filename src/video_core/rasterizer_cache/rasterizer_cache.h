@@ -1123,7 +1123,15 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
 
     surface.flags |= SurfaceFlagBits::Custom;
 
-    const auto upload = [this, level, surface_id, material]() -> bool {
+    // With async custom loading this runs frames later (CustomTexManager::TickFrame); by then the
+    // surface may have been garbage collected (its slot destroyed) or the slot reused for another
+    // surface. Only upload if the slot still holds the same surface.
+    const auto upload = [this, level, surface_id, material,
+                         unique_id = surface.UniqueId()]() -> bool {
+        if (!slot_surfaces.contains(surface_id) ||
+            slot_surfaces[surface_id].UniqueId() != unique_id) {
+            return false;
+        }
         ASSERT_MSG(True(slot_surfaces[surface_id].flags & SurfaceFlagBits::Custom),
                    "Surface is not suitable for custom upload, aborting!");
         if (!slot_surfaces[surface_id].IsCustom()) {

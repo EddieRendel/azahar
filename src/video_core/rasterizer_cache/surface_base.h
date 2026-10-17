@@ -52,6 +52,13 @@ public:
         return addr < overlap_end && overlap_addr < end;
     }
 
+    /// Identifies one logical surface: kept by copies (e.g. when it is swapped for its custom
+    /// version), new for every surface created from params. Lets deferred work check that a
+    /// SurfaceId still refers to the surface it was queued for.
+    u64 UniqueId() const noexcept {
+        return unique_id;
+    }
+
     u64 ModificationTick() const noexcept {
         return modification_tick;
     }
@@ -90,6 +97,7 @@ public:
     u32 fill_size = 0;
     std::array<u8, 4> fill_data{};
     u64 modification_tick = 1;
+    u64 unique_id = 0;
 };
 
 } // namespace VideoCore

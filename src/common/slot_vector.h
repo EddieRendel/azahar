@@ -53,6 +53,12 @@ public:
         return values[id.index].object;
     }
 
+    /// True if id refers to a live (inserted and not erased) value.
+    [[nodiscard]] bool contains(SlotId id) const noexcept {
+        return id && id.index / 64 < stored_bitset.size() &&
+               ((stored_bitset[id.index / 64] >> (id.index % 64)) & 1) != 0;
+    }
+
     template <typename... Args>
     [[nodiscard]] SlotId insert(Args&&... args) noexcept {
         const u32 index = FreeValueIndex();
