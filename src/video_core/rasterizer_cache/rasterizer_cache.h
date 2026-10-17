@@ -598,10 +598,11 @@ SurfaceId RasterizerCache<T>::GetTextureSurface(const Pica::Texture::TextureInfo
         }
         const auto [src_surface_id, rect] =
             GetSurfaceSubRect(params, ScaleMatch::Ignore, true, initial_flags);
-        Surface& src_surface = slot_surfaces[src_surface_id];
 
-        params.res_scale = src_surface.res_scale;
+        params.res_scale = slot_surfaces[src_surface_id].res_scale;
         SurfaceId tmp_surface_id = CreateSurface(params, initial_flags);
+        // CreateSurface may grow slot_surfaces and move its storage: take both references after it.
+        Surface& src_surface = slot_surfaces[src_surface_id];
         Surface& tmp_surface = slot_surfaces[tmp_surface_id];
         sentenced.emplace_back(tmp_surface_id, runtime.GetResourceTick());
 
@@ -779,11 +780,16 @@ FramebufferHelper<T> RasterizerCache<T>::GetFramebufferSurfaces(bool using_color
                         boost::icl::length(color_vp_interval));
     }
     if (depth_id) {
+        depth_surface = &slot_surfaces[depth_id]; // the color validation may have moved it
         depth_level = depth_surface->LevelOf(depth_params.addr);
         depth_surface->flags |= SurfaceFlagBits::RenderTarget;
         ValidateSurface(depth_id, boost::icl::first(depth_vp_interval),
                         boost::icl::length(depth_vp_interval));
     }
+
+    // ValidateSurface can insert into slot_surfaces (custom textures) and move its storage.
+    color_surface = color_id ? &slot_surfaces[color_id] : nullptr;
+    depth_surface = depth_id ? &slot_surfaces[depth_id] : nullptr;
 
     const FramebufferParams fb_params = {
         .color_id = color_id,
@@ -967,23 +973,25 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
         return;
     }
 
-    Surface& surface = slot_surfaces[surface_id];
+    // UploadCustomSurface can insert into slot_surfaces (swap_and_insert), which may grow and move
+    // its storage, so look the surface up again instead of holding a reference across the loop.
+    const auto surface = [this, surface_id]() -> Surface& { return slot_surfaces[surface_id]; };
     const SurfaceInterval validate_interval(addr, addr + size);
 
-    if (surface.type == SurfaceType::Fill) {
-        ASSERT_MSG(surface.IsRegionValid(validate_interval),
+    if (surface().type == SurfaceType::Fill) {
+        ASSERT_MSG(surface().IsRegionValid(validate_interval),
                    "Attempted to validate a non-valid fill surface");
         return;
     }
 
-    SurfaceRegions validate_regions = surface.invalid_regions & validate_interval;
+    SurfaceRegions validate_regions = surface().invalid_regions & validate_interval;
 
     if (validate_regions.empty()) {
         return;
     }
 
     auto notify_validated = [&](SurfaceInterval interval) {
-        surface.MarkValid(interval);
+        surface().MarkValid(interval);
         validate_regions.erase(interval);
     };
 
@@ -991,48 +999,48 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
                            "RasterizerCache::ValidateSurface (from {:#x} to {:#x})", addr,
                            addr + size};
 
-    u32 level = surface.LevelOf(addr);
-    SurfaceInterval level_interval = surface.LevelInterval(level);
+    u32 level = surface().LevelOf(addr);
+    SurfaceInterval level_interval = surface().LevelInterval(level);
     while (!validate_regions.empty()) {
         // Take an invalid interval from the validation regions and clamp it
         // to the current level interval. If the interval is empty
         // then we have validated the entire level so move to the next.
         const auto interval = *validate_regions.begin() & level_interval;
         if (boost::icl::is_empty(interval)) {
-            level_interval = surface.LevelInterval(++level);
+            level_interval = surface().LevelInterval(++level);
             continue;
         }
 
         // Look for a valid surface to copy from.
-        const SurfaceParams params = surface.FromInterval(interval);
+        const SurfaceParams params = surface().FromInterval(interval);
         const SurfaceId copy_surface_id =
             FindMatch<MatchFlags::Copy>(params, ScaleMatch::Ignore, interval);
         if (copy_surface_id && copy_surface_id != surface_id) {
             Surface& copy_surface = slot_surfaces[copy_surface_id];
             const SurfaceInterval copy_interval = copy_surface.GetCopyableInterval(params);
-            CopySurface(copy_surface, surface, copy_interval);
+            CopySurface(copy_surface, surface(), copy_interval);
             notify_validated(copy_interval);
             continue;
         }
 
         // Try to find surface in cache with different format
         // that can can be reinterpreted to the requested format.
-        if (ValidateByReinterpretation(surface, params, interval)) {
+        if (ValidateByReinterpretation(surface(), params, interval)) {
             notify_validated(interval);
             continue;
         }
 
         FlushRegion(params.addr, params.size);
         if (!use_custom_textures || !UploadCustomSurface(surface_id, interval)) {
-            UploadSurface(surface, interval);
+            UploadSurface(surface(), interval);
         }
         notify_validated(params.GetInterval());
     }
 
     // Filtered mipmaps often look really bad. We can achieve better quality by
     // generating them from the base level.
-    if (surface.res_scale != 1 && level != 0) {
-        runtime.GenerateMipmaps(surface);
+    if (surface().res_scale != 1 && level != 0) {
+        runtime.GenerateMipmaps(surface());
     }
 }
 
