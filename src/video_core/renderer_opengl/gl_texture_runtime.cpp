@@ -321,6 +321,10 @@ bool TextureRuntime::BlitTextures(Surface& source, Surface& dest,
 }
 
 void TextureRuntime::GenerateMipmaps(Surface& surface) {
+    if (VideoCore::IsCustomFormatCompressed(surface.custom_format)) {
+        // glGenerateMipmap can't build compressed levels; custom DDS textures bring their own.
+        return;
+    }
     const DebugScope scope(*this, Common::Vec4f{}, "TextureRuntime::GenerateMipmaps");
 
     OpenGLState state = OpenGLState::GetCurState();
@@ -456,6 +460,18 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
     const auto upload = [&](u32 index, VideoCore::CustomTexture* texture) {
         glBindTexture(GL_TEXTURE_2D, Handle(index));
         if (VideoCore::IsCustomFormatCompressed(custom_format)) {
+            if (level == 0 && !texture->mips.empty()) {
+                // Upload the file's own mip chain: compressed levels can't be generated.
+                const u32 count = std::min<u32>(levels, static_cast<u32>(texture->mips.size()));
+                for (u32 mip = 0; mip < count; mip++) {
+                    const auto [offset, size] = texture->mips[mip];
+                    glCompressedTexSubImage2D(GL_TEXTURE_2D, mip, 0, 0, std::max(width >> mip, 1U),
+                                              std::max(height >> mip, 1U), tuple.format,
+                                              static_cast<GLsizei>(size),
+                                              texture->data.data() + offset);
+                }
+                return;
+            }
             const GLsizei image_size = static_cast<GLsizei>(texture->data.size());
             glCompressedTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, width, height, tuple.format,
                                       image_size, texture->data.data());

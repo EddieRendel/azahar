@@ -9,6 +9,7 @@
 #include <mutex>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 #include "video_core/custom_textures/custom_format.h"
 
@@ -62,6 +63,8 @@ public:
     CustomPixelFormat format;
     CustomFileFormat file_format;
     std::vector<u8> data;
+    /// (offset, size) of each mip level in data; empty unless the file carries levels (DDS / KTX).
+    std::vector<std::pair<u32, u32>> mips;
     MapType type;
 };
 

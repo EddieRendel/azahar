@@ -3,6 +3,8 @@
 // Refer to the misc/licenses/gplv2.txt file included.
 
 #define DDSKTX_IMPLEMENT
+#include <algorithm>
+#include <cstring>
 #include <dds-ktx.h>
 #include <lodepng.h>
 #include "common/file_util.h"
@@ -22,7 +24,7 @@ bool ImageInterface::DecodePNG(std::vector<u8>& dst, u32& width, u32& height,
 }
 
 bool ImageInterface::DecodeDDS(std::vector<u8>& dst, u32& width, u32& height, ddsktx_format& format,
-                               std::span<const u8> src) {
+                               std::vector<std::pair<u32, u32>>& mips, std::span<const u8> src) {
     ddsktx_texture_info tc{};
     const int size = static_cast<int>(src.size());
 
@@ -34,11 +36,19 @@ bool ImageInterface::DecodeDDS(std::vector<u8>& dst, u32& width, u32& height, dd
     height = tc.height;
     format = tc.format;
 
-    ddsktx_sub_data sub_data{};
-    ddsktx_get_sub(&tc, &sub_data, src.data(), size, 0, 0, 0);
-
-    dst.resize(sub_data.size_bytes);
-    std::memcpy(dst.data(), sub_data.buff, sub_data.size_bytes);
+    // Keep the file's own mip chain: compressed formats can't have their mip levels generated
+    // on the GPU, so without it the smaller levels of a mipmapped texture stay empty.
+    dst.clear();
+    mips.clear();
+    for (int mip = 0; mip < std::max(tc.num_mips, 1); mip++) {
+        ddsktx_sub_data sub_data{};
+        ddsktx_get_sub(&tc, &sub_data, src.data(), size, 0, 0, mip);
+        const auto offset = static_cast<u32>(dst.size());
+        const auto bytes = static_cast<u32>(sub_data.size_bytes);
+        dst.resize(dst.size() + bytes);
+        std::memcpy(dst.data() + offset, sub_data.buff, bytes);
+        mips.emplace_back(offset, bytes);
+    }
 
     return true;
 }

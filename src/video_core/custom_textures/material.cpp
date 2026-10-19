@@ -92,7 +92,12 @@ void CustomTexture::LoadPNG(std::span<const u8> input, bool flip_png) {
 
 void CustomTexture::LoadDDS(std::span<const u8> input) {
     ddsktx_format dds_format{};
-    image_interface.DecodeDDS(data, width, height, dds_format, input);
+    if (!image_interface.DecodeDDS(data, width, height, dds_format, mips, input)) {
+        LOG_ERROR(Render, "Failed to decode dds: {}", path);
+        data.clear();
+        mips.clear();
+        return;
+    }
     format = ToCustomPixelFormat(dds_format);
 }
 

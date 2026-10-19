@@ -25,7 +25,7 @@ namespace {
 MICROPROFILE_DEFINE(CustomTexManager_TickFrame, "CustomTexManager", "TickFrame",
                     MP_RGB(54, 16, 32));
 
-constexpr std::size_t MAX_UPLOADS_PER_TICK = 8;
+constexpr std::size_t MAX_UPLOADS_PER_TICK = 32;
 
 using namespace Common::Literals;
 
@@ -131,10 +131,6 @@ bool CustomTexManager::ParseFilename(const FileUtil::FSTEntry& file, CustomTextu
     // The last string should always be the file extension.
     const CustomFileFormat file_format = MakeFileFormat(parts.back());
     if (file_format == CustomFileFormat::None) {
-        return false;
-    }
-    if (file_format == CustomFileFormat::DDS && skip_mipmap) {
-        LOG_ERROR(Render, "Mipmap skip is incompatible with DDS textures, skipping!");
         return false;
     }
     texture->file_format = file_format;

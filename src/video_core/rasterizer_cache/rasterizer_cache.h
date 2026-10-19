@@ -1039,7 +1039,8 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
 
     // Filtered mipmaps often look really bad. We can achieve better quality by
     // generating them from the base level.
-    if (surface().res_scale != 1 && level != 0) {
+    if (surface().res_scale != 1 && level != 0 &&
+        !IsCustomFormatCompressed(surface().custom_format)) {
         runtime.GenerateMipmaps(surface());
     }
 }
@@ -1153,7 +1154,8 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
         }
         Surface& surface = slot_surfaces[surface_id];
         surface.UploadCustom(material, level);
-        if (custom_tex_manager.SkipMipmaps()) {
+        // Compressed (DDS) materials upload their own mip chain; levels can't be generated for them.
+        if (custom_tex_manager.SkipMipmaps() && !IsCustomFormatCompressed(material->format)) {
             runtime.GenerateMipmaps(surface);
         }
         return true;

@@ -972,21 +972,35 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
         std::memcpy(data, texture->data.data(), custom_size);
         runtime.upload_buffer.Commit(custom_size);
 
-        scheduler.Record([buffer = runtime.upload_buffer.Handle(), level, params, rect,
-                          offset = offset](vk::CommandBuffer cmdbuf) {
-            const vk::BufferImageCopy buffer_image_copy = {
-                .bufferOffset = offset,
+        // A compressed file (DDS) brings its own mip chain, which can't be generated on the GPU:
+        // copy every stored level that the image has. Otherwise copy the one level.
+        std::vector<vk::BufferImageCopy> copies;
+        const bool all_levels = level == 0 && !texture->mips.empty() &&
+                                VideoCore::IsCustomFormatCompressed(material->format);
+        const u32 count =
+            all_levels ? std::min<u32>(levels, static_cast<u32>(texture->mips.size())) : 1;
+        for (u32 i = 0; i < count; i++) {
+            const u32 mip = all_levels ? i : level;
+            const u32 w = all_levels ? std::max(rect.GetWidth() >> i, 1U) : rect.GetWidth();
+            const u32 h = all_levels ? std::max(rect.GetHeight() >> i, 1U) : rect.GetHeight();
+            copies.push_back(vk::BufferImageCopy{
+                .bufferOffset = offset + (all_levels ? texture->mips[i].first : 0),
                 .bufferRowLength = 0,
-                .bufferImageHeight = rect.GetHeight(),
+                .bufferImageHeight = 0,
                 .imageSubresource{
                     .aspectMask = params.aspect,
-                    .mipLevel = level,
+                    .mipLevel = mip,
                     .baseArrayLayer = 0,
                     .layerCount = 1,
                 },
-                .imageOffset = {static_cast<s32>(rect.left), static_cast<s32>(rect.bottom), 0},
-                .imageExtent = {rect.GetWidth(), rect.GetHeight(), 1},
-            };
+                .imageOffset = {0, 0, 0},
+                .imageExtent = {w, h, 1},
+            });
+        }
+        const u32 first_level = all_levels ? 0 : level;
+
+        scheduler.Record([buffer = runtime.upload_buffer.Handle(), params, first_level, count,
+                          copies = std::move(copies)](vk::CommandBuffer cmdbuf) {
 
             const vk::ImageMemoryBarrier read_barrier = {
                 .srcAccessMask = params.src_access,
@@ -996,7 +1010,7 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = params.src_image,
-                .subresourceRange = MakeSubresourceRange(params.aspect, level),
+                .subresourceRange = MakeSubresourceRange(params.aspect, first_level, count),
             };
             const vk::ImageMemoryBarrier write_barrier = {
                 .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
@@ -1006,14 +1020,14 @@ void Surface::UploadCustom(const VideoCore::Material* material, u32 level) {
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = params.src_image,
-                .subresourceRange = MakeSubresourceRange(params.aspect, level),
+                .subresourceRange = MakeSubresourceRange(params.aspect, first_level, count),
             };
 
             cmdbuf.pipelineBarrier(params.pipeline_flags, vk::PipelineStageFlagBits::eTransfer,
                                    vk::DependencyFlagBits::eByRegion, {}, {}, read_barrier);
 
             cmdbuf.copyBufferToImage(buffer, params.src_image, vk::ImageLayout::eTransferDstOptimal,
-                                     buffer_image_copy);
+                                     static_cast<u32>(copies.size()), copies.data());
 
             cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, params.pipeline_flags,
                                    vk::DependencyFlagBits::eByRegion, {}, {}, write_barrier);
