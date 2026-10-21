@@ -944,11 +944,17 @@ SurfaceId RasterizerCache<T>::FindMatch(const SurfaceParams& params, ScaleMatch 
         IsMatch_Helper(std::integral_constant<MatchFlags, MatchFlags::SubRect>{}, [&] {
             return std::make_pair(surface.CanSubRect(params), surface.GetInterval());
         });
+        // A custom surface with a compressed (BC*) image holds blocks, not texels: copying or
+        // reinterpreting it into a guest-format surface writes garbage (colour noise), so it is
+        // never a copy source.
+        const bool compressed_custom =
+            surface.IsCustom() && IsCustomFormatCompressed(surface.custom_format);
         IsMatch_Helper(std::integral_constant<MatchFlags, MatchFlags::Copy>{}, [&] {
             ASSERT(validate_interval);
             const SurfaceInterval copy_interval =
                 surface.GetCopyableInterval(params.FromInterval(*validate_interval));
-            const bool matched = boost::icl::length(copy_interval & *validate_interval) != 0 &&
+            const bool matched = !compressed_custom &&
+                                 boost::icl::length(copy_interval & *validate_interval) != 0 &&
                                  surface.CanCopy(params, copy_interval);
             return std::make_pair(matched, copy_interval);
         });
@@ -956,7 +962,8 @@ SurfaceId RasterizerCache<T>::FindMatch(const SurfaceParams& params, ScaleMatch 
             ASSERT(validate_interval);
             const SurfaceInterval copy_interval =
                 surface.GetCopyableInterval(params.FromInterval(*validate_interval));
-            const bool matched = boost::icl::length(copy_interval & *validate_interval) != 0 &&
+            const bool matched = !compressed_custom &&
+                                 boost::icl::length(copy_interval & *validate_interval) != 0 &&
                                  surface.CanReinterpret(params);
             return std::make_pair(matched, copy_interval);
         });
@@ -1011,10 +1018,14 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
             continue;
         }
 
-        // Look for a valid surface to copy from.
+        // Look for a valid surface to copy from. Not into a compressed custom image (see FindMatch):
+        // it is revalidated from guest memory below.
         const SurfaceParams params = surface().FromInterval(interval);
+        const bool dest_compressed =
+            surface().IsCustom() && IsCustomFormatCompressed(surface().custom_format);
         const SurfaceId copy_surface_id =
-            FindMatch<MatchFlags::Copy>(params, ScaleMatch::Ignore, interval);
+            dest_compressed ? SurfaceId{}
+                            : FindMatch<MatchFlags::Copy>(params, ScaleMatch::Ignore, interval);
         if (copy_surface_id && copy_surface_id != surface_id) {
             Surface& copy_surface = slot_surfaces[copy_surface_id];
             const SurfaceInterval copy_interval = copy_surface.GetCopyableInterval(params);
@@ -1025,7 +1036,7 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
 
         // Try to find surface in cache with different format
         // that can can be reinterpreted to the requested format.
-        if (ValidateByReinterpretation(surface(), params, interval)) {
+        if (!dest_compressed && ValidateByReinterpretation(surface(), params, interval)) {
             notify_validated(interval);
             continue;
         }
