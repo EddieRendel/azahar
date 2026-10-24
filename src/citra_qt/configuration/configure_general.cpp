@@ -167,10 +167,19 @@ void ConfigureGeneral::ResetDefaults() {
 }
 
 void ConfigureGeneral::ApplyConfiguration() {
+    // The slider moves in 5% steps: a limit set in the config file (e.g. 100.28 to match a 59.83 Hz game to a 60 Hz
+    // display) would be rounded to the nearest step on every OK. Keep the exact value unless the slider was moved.
+    const double current_limit = Settings::values.frame_limit.GetValue();
     ConfigurationShared::ApplyPerGameSetting(
-        &Settings::values.frame_limit, ui->emulation_speed_combo, [this](s32) {
-            const bool is_maximum = ui->frame_limit->value() == ui->frame_limit->maximum();
-            return is_maximum ? 0 : SliderToSettings(ui->frame_limit->value());
+        &Settings::values.frame_limit, ui->emulation_speed_combo, [this, current_limit](s32) -> double {
+            const int value = ui->frame_limit->value();
+            if (value == ui->frame_limit->maximum()) {
+                return 0;
+            }
+            if (current_limit != 0 && value == SettingsToSlider(static_cast<int>(current_limit))) {
+                return current_limit;
+            }
+            return SliderToSettings(value);
         });
 
     ConfigurationShared::ApplyPerGameSetting(
